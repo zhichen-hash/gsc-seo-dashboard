@@ -3,6 +3,7 @@ Google Search Console API 集成模块
 """
 import os
 import pickle
+import streamlit as st
 from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import InstalledAppFlow
@@ -10,6 +11,7 @@ from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 from datetime import datetime, timedelta
 import pandas as pd
+import json
 
 # API 权限范围
 SCOPES = ['https://www.googleapis.com/auth/webmasters.readonly']
@@ -17,22 +19,43 @@ SCOPES = ['https://www.googleapis.com/auth/webmasters.readonly']
 class GSCClient:
     """Google Search Console API 客户端"""
 
-    def __init__(self, credentials_file='credentials.json', token_file='token.json'):
-        """
-        初始化 GSC 客户端
-        """
-        self.credentials_file = credentials_file
-        self.token_file = token_file
+    def __init__(self):
+        """初始化 GSC 客户端"""
         self.service = None
         self._authenticate()
+
+    def _get_credentials_dict(self):
+        """获取凭证配置"""
+        # 优先从 Streamlit Secrets 读取
+        if hasattr(st, 'secrets') and 'gsc_credentials' in st.secrets:
+            creds_dict = {
+                "installed": {
+                    "client_id": st.secrets["gsc_credentials"]["installed_client_id"],
+                    "project_id": st.secrets["gsc_credentials"]["installed_project_id"],
+                    "auth_uri": st.secrets["gsc_credentials"]["installed_auth_uri"],
+                    "token_uri": st.secrets["gsc_credentials"]["installed_token_uri"],
+                    "auth_provider_x509_cert_url": st.secrets["gsc_credentials"]["installed_auth_provider_x509_cert_url"],
+                    "client_secret": st.secrets["gsc_credentials"]["installed_client_secret"],
+                    "redirect_uris": st.secrets["gsc_credentials"]["installed_redirect_uris"]
+                }
+            }
+            return creds_dict
+        
+        # 否则从本地文件读取
+        if os.path.exists('credentials.json'):
+            with open('credentials.json', 'r') as f:
+                return json.load(f)
+        
+        raise FileNotFoundError("找不到 credentials.json 文件，且未配置 Streamlit Secrets")
 
     def _authenticate(self):
         """处理 OAuth 认证流程"""
         creds = None
+        token_file = 'token.json'
 
         # 检查是否已有保存的令牌
-        if os.path.exists(self.token_file):
-            with open(self.token_file, 'rb') as token:
+        if os.path.exists(token_file):
+            with open(token_file, 'rb') as token:
                 creds = pickle.load(token)
 
         # 如果没有有效凭据，进行授权
@@ -40,17 +63,23 @@ class GSCClient:
             if creds and creds.expired and creds.refresh_token:
                 creds.refresh(Request())
             else:
-                if not os.path.exists(self.credentials_file):
-                    raise FileNotFoundError(
-                        f"找不到 {self.credentials_file} 文件。"
-                    )
-
+                creds_dict = self._get_credentials_dict()
+                
+                # 创建临时凭证文件
+                temp_creds_file = 'temp_credentials.json'
+                with open(temp_creds_file, 'w') as f:
+                    json.dump(creds_dict, f)
+                
                 flow = InstalledAppFlow.from_client_secrets_file(
-                    self.credentials_file, SCOPES)
+                    temp_creds_file, SCOPES)
                 creds = flow.run_local_server(port=0)
+                
+                # 删除临时文件
+                if os.path.exists(temp_creds_file):
+                    os.remove(temp_creds_file)
 
             # 保存凭据供下次使用
-            with open(self.token_file, 'wb') as token:
+            with open(token_file, 'wb') as token:
                 pickle.dump(creds, token)
 
         # 构建 API 服务
@@ -176,7 +205,7 @@ class GSCClient:
 
             df = pd.DataFrame(data)
             df['date'] = pd.to_datetime(df['date'])
-            df = df.sort_values('date')
+df = df.sort_values('date')
             return df
 
         except HttpError as error:
